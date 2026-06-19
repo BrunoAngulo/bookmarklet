@@ -51,8 +51,7 @@
       elements: null,
       lastTrigger: 0,
       issueKey: "",
-      credentials: { email: "", token: "" },
-      time: { weeks: 0, days: 0, hours: 0, minutes: 0 }
+      credentials: { email: "", token: "" }
     };
 
     window[GLOBAL_KEY] = {
@@ -316,9 +315,9 @@
         return;
       }
 
-      state.time = { weeks: 0, days: 0, hours: 0, minutes: 0 };
       state.elements.activitySelect.value = "";
-      renderTime();
+      state.elements.timeInput.value = "";
+      updateTimePreview();
       updateDescription();
       setStatus("", "");
     }
@@ -354,14 +353,13 @@
         '    <option value="" disabled selected>Selecciona una actividad</option>',
         optionsHtml,
         "  </select>",
-        '  <label class="tjw-label">Tiempo invertido <span class="tjw-req">*</span></label>',
-        '  <div class="tjw-time" data-time-grid>',
-        timeUnitHtml("weeks", "Semanas"),
-        timeUnitHtml("days", "Días"),
-        timeUnitHtml("hours", "Horas"),
-        timeUnitHtml("minutes", "Minutos"),
+        '  <label class="tjw-label" for="tjw-time">Tiempo invertido <span class="tjw-req">*</span></label>',
+        '  <div class="tjw-timefield">',
+        '    <span class="tjw-timefield-icon" aria-hidden="true">⏱</span>',
+        '    <input id="tjw-time" class="tjw-timefield-input" type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="2w 4d 6h 45m">',
+        '    <span class="tjw-timefield-check" data-time-check aria-hidden="true"></span>',
         "  </div>",
-        '  <p class="tjw-time-preview">Formato Jira: <strong data-time-preview>0m</strong></p>',
+        '  <p class="tjw-time-preview" data-time-hint>Formato: <strong>w</strong> semanas · <strong>d</strong> días · <strong>h</strong> horas · <strong>m</strong> minutos.</p>',
         '  <label class="tjw-label" for="tjw-description">Descripción</label>',
         '  <input id="tjw-description" class="tjw-input" type="text" readonly tabindex="-1" aria-readonly="true">',
         '  <div class="tjw-status" data-status hidden></div>',
@@ -380,28 +378,17 @@
         issueLabel: overlay.querySelector(".tjw-issue"),
         activitySelect: overlay.querySelector("#tjw-activity"),
         description: overlay.querySelector("#tjw-description"),
-        timePreview: overlay.querySelector("[data-time-preview]"),
+        timeInput: overlay.querySelector("#tjw-time"),
+        timeHint: overlay.querySelector("[data-time-hint]"),
+        timeCheck: overlay.querySelector("[data-time-check]"),
         status: overlay.querySelector("[data-status]"),
         saveButton: overlay.querySelector('[data-action="save"]')
       };
 
       wireEvents();
-      renderTime();
+      updateTimePreview();
 
       return state.elements;
-    }
-
-    function timeUnitHtml(unit, label) {
-      return [
-        '<div class="tjw-time-unit">',
-        '  <span class="tjw-time-label">' + label + "</span>",
-        '  <div class="tjw-stepper">',
-        '    <button type="button" class="tjw-step" data-step="dec" data-unit="' + unit + '" aria-label="Disminuir ' + label + '">&minus;</button>',
-        '    <span class="tjw-step-value" data-unit-value="' + unit + '">0</span>',
-        '    <button type="button" class="tjw-step" data-step="inc" data-unit="' + unit + '" aria-label="Aumentar ' + label + '">+</button>',
-        "  </div>",
-        "</div>"
-      ].join("");
     }
 
     function wireEvents() {
@@ -427,13 +414,12 @@
 
       elements.activitySelect.addEventListener("change", updateDescription);
 
-      Array.prototype.forEach.call(elements.overlay.querySelectorAll("[data-step]"), function (button) {
-        button.addEventListener("click", function (event) {
+      elements.timeInput.addEventListener("input", updateTimePreview);
+      elements.timeInput.addEventListener("keydown", function (event) {
+        if (event.key === "Enter") {
           event.preventDefault();
-          var unit = button.getAttribute("data-unit");
-          var direction = button.getAttribute("data-step") === "inc" ? 1 : -1;
-          stepTime(unit, direction);
-        });
+          handleSave();
+        }
       });
 
       document.addEventListener("keydown", function (event) {
@@ -445,59 +431,91 @@
       }, true);
     }
 
-    function stepTime(unit, direction) {
-      var limits = { weeks: 99, days: 6, hours: 23, minutes: 59 };
-      var current = state.time[unit] || 0;
-      var next = current + direction;
+    function parseJiraTime(raw) {
+      var str = String(raw || "").trim().toLowerCase();
 
-      if (next < 0) {
-        next = 0;
+      if (!str) {
+        return { valid: false, normalized: "", totalMinutes: 0, empty: true };
       }
 
-      if (typeof limits[unit] === "number" && next > limits[unit]) {
-        next = limits[unit];
+      if (/^\d+$/.test(str)) {
+        var asMinutes = parseInt(str, 10);
+        return { valid: asMinutes > 0, normalized: asMinutes + "m", totalMinutes: asMinutes, empty: false };
       }
 
-      state.time[unit] = next;
-      renderTime();
+      var units = { w: 0, d: 0, h: 0, m: 0 };
+      var regex = /(\d+)\s*(w|d|h|m)/g;
+      var consumed = "";
+      var match;
+
+      while ((match = regex.exec(str)) !== null) {
+        units[match[2]] += parseInt(match[1], 10);
+        consumed += match[0];
+      }
+
+      if (consumed.replace(/\s+/g, "") !== str.replace(/\s+/g, "")) {
+        return { valid: false, normalized: "", totalMinutes: 0, empty: false };
+      }
+
+      var parts = [];
+      if (units.w > 0) {
+        parts.push(units.w + "w");
+      }
+      if (units.d > 0) {
+        parts.push(units.d + "d");
+      }
+      if (units.h > 0) {
+        parts.push(units.h + "h");
+      }
+      if (units.m > 0) {
+        parts.push(units.m + "m");
+      }
+
+      var total = units.w * 7 * 24 * 60 + units.d * 24 * 60 + units.h * 60 + units.m;
+      return { valid: parts.length > 0, normalized: parts.join(" "), totalMinutes: total, empty: false };
     }
 
-    function renderTime() {
+    function currentTime() {
+      return parseJiraTime(state.elements ? state.elements.timeInput.value : "");
+    }
+
+    function updateTimePreview() {
       if (!state.elements) {
         return;
       }
 
-      ["weeks", "days", "hours", "minutes"].forEach(function (unit) {
-        var node = state.elements.overlay.querySelector('[data-unit-value="' + unit + '"]');
-        if (node) {
-          node.textContent = String(state.time[unit] || 0);
-        }
-      });
+      var parsed = currentTime();
+      var input = state.elements.timeInput;
+      var hint = state.elements.timeHint;
+      var check = state.elements.timeCheck;
 
-      state.elements.timePreview.textContent = buildJiraTime() || "0m";
+      if (parsed.empty) {
+        input.dataset.state = "";
+        check.textContent = "";
+        hint.dataset.type = "";
+        hint.innerHTML = "Formato: <strong>w</strong> semanas · <strong>d</strong> días · <strong>h</strong> horas · <strong>m</strong> minutos.";
+        return;
+      }
+
+      if (parsed.valid) {
+        input.dataset.state = "ok";
+        check.textContent = "✓";
+        hint.dataset.type = "ok";
+        hint.textContent = "Se registrará: " + parsed.normalized;
+      } else {
+        input.dataset.state = "bad";
+        check.textContent = "";
+        hint.dataset.type = "bad";
+        hint.textContent = "Formato no válido. Ejemplo: 2w 4d 6h 45m";
+      }
     }
 
     function buildJiraTime() {
-      var parts = [];
-
-      if (state.time.weeks > 0) {
-        parts.push(state.time.weeks + "w");
-      }
-      if (state.time.days > 0) {
-        parts.push(state.time.days + "d");
-      }
-      if (state.time.hours > 0) {
-        parts.push(state.time.hours + "h");
-      }
-      if (state.time.minutes > 0) {
-        parts.push(state.time.minutes + "m");
-      }
-
-      return parts.join(" ");
+      return currentTime().normalized;
     }
 
     function hasTime() {
-      return state.time.weeks > 0 || state.time.days > 0 || state.time.hours > 0 || state.time.minutes > 0;
+      return currentTime().valid;
     }
 
     function updateDescription() {
@@ -519,7 +537,8 @@
       }
 
       if (!hasTime()) {
-        setStatus("Indica un tiempo mayor a 0 usando los controles.", "error");
+        setStatus("Indica un tiempo válido mayor a 0. Ejemplo: 2w 4d 6h 45m.", "error");
+        state.elements.timeInput.focus();
         return;
       }
 
@@ -769,15 +788,18 @@
         "#" + MODAL_ID + " .tjw-select,#" + MODAL_ID + " .tjw-input{width:100%;min-height:44px;border:1px solid #cbd5e1;border-radius:10px;padding:10px 12px;font-size:14px;color:#0f172a;background:#ffffff;margin-bottom:18px;}",
         "#" + MODAL_ID + " .tjw-select:focus,#" + MODAL_ID + " .tjw-input:focus{outline:none;border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,0.15);}",
         "#" + MODAL_ID + " .tjw-input[readonly]{background:#f1f5f9;color:#475569;cursor:default;}",
-        "#" + MODAL_ID + " .tjw-time{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:10px;}",
-        "#" + MODAL_ID + " .tjw-time-unit{display:flex;flex-direction:column;align-items:center;gap:6px;border:1px solid #e2e8f0;border-radius:12px;padding:10px 6px;background:#f8fafc;}",
-        "#" + MODAL_ID + " .tjw-time-label{font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.04em;}",
-        "#" + MODAL_ID + " .tjw-stepper{display:flex;align-items:center;gap:6px;}",
-        "#" + MODAL_ID + " .tjw-step{width:28px;height:28px;border:1px solid #cbd5e1;border-radius:8px;background:#ffffff;color:#1e293b;font-size:16px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;}",
-        "#" + MODAL_ID + " .tjw-step:hover{background:#2563eb;border-color:#2563eb;color:#ffffff;}",
-        "#" + MODAL_ID + " .tjw-step-value{min-width:26px;text-align:center;font-size:16px;font-weight:700;color:#0f172a;}",
-        "#" + MODAL_ID + " .tjw-time-preview{margin:0 0 18px;font-size:13px;color:#64748b;}",
-        "#" + MODAL_ID + " .tjw-time-preview strong{color:#2563eb;font-family:'Segoe UI',system-ui,monospace;}",
+        "#" + MODAL_ID + " .tjw-timefield{position:relative;display:flex;align-items:center;margin-bottom:8px;}",
+        "#" + MODAL_ID + " .tjw-timefield-icon{position:absolute;left:14px;font-size:16px;color:#94a3b8;pointer-events:none;}",
+        "#" + MODAL_ID + " .tjw-timefield-input{width:100%;min-height:46px;border:1px solid #cbd5e1;border-radius:12px;padding:10px 40px 10px 40px;font-size:15px;font-weight:600;letter-spacing:0.02em;color:#0f172a;background:#ffffff;transition:border-color .15s ease,box-shadow .15s ease;}",
+        "#" + MODAL_ID + " .tjw-timefield-input::placeholder{color:#94a3b8;font-weight:500;letter-spacing:normal;}",
+        "#" + MODAL_ID + " .tjw-timefield-input:focus{outline:none;border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,0.15);}",
+        "#" + MODAL_ID + " .tjw-timefield-input[data-state='ok']{border-color:#10b981;box-shadow:0 0 0 3px rgba(16,185,129,0.14);}",
+        "#" + MODAL_ID + " .tjw-timefield-input[data-state='bad']{border-color:#ef4444;box-shadow:0 0 0 3px rgba(239,68,68,0.14);}",
+        "#" + MODAL_ID + " .tjw-timefield-check{position:absolute;right:14px;font-size:16px;font-weight:800;color:#10b981;}",
+        "#" + MODAL_ID + " .tjw-time-preview{margin:0 0 18px;font-size:12.5px;color:#64748b;min-height:16px;}",
+        "#" + MODAL_ID + " .tjw-time-preview strong{color:#334155;}",
+        "#" + MODAL_ID + " .tjw-time-preview[data-type='ok']{color:#047857;font-weight:600;}",
+        "#" + MODAL_ID + " .tjw-time-preview[data-type='bad']{color:#b91c1c;font-weight:600;}",
         "#" + MODAL_ID + " .tjw-status{margin:0 0 16px;padding:10px 12px;border-radius:10px;font-size:13px;line-height:1.45;}",
         "#" + MODAL_ID + " .tjw-status[data-type='info']{background:#eff6ff;color:#1d4ed8;}",
         "#" + MODAL_ID + " .tjw-status[data-type='success']{background:#ecfdf5;color:#047857;}",
@@ -791,7 +813,7 @@
         "#" + MODAL_ID + " .tjw-primary:disabled{opacity:0.6;cursor:not-allowed;}",
         "#" + TOAST_ID + "{position:fixed;left:50%;bottom:24px;transform:translate(-50%,12px);z-index:2147483647;max-width:min(440px,calc(100vw - 32px));background:#0f172a;color:#f8fafc;padding:12px 18px;border-radius:12px;font-family:'Segoe UI',system-ui,Arial,sans-serif;font-size:13px;line-height:1.4;box-shadow:0 16px 40px rgba(15,23,42,0.4);opacity:0;transition:opacity .35s ease,transform .35s ease;}",
         "#" + TOAST_ID + "[data-visible='true']{opacity:1;transform:translate(-50%,0);}",
-        "@media (max-width:520px){#" + MODAL_ID + " .tjw-time{grid-template-columns:repeat(2,1fr);}#" + MODAL_ID + " .tjw-actions{flex-direction:column-reverse;}#" + MODAL_ID + " .tjw-actions button{width:100%;}}"
+        "@media (max-width:520px){#" + MODAL_ID + " .tjw-actions{flex-direction:column-reverse;}#" + MODAL_ID + " .tjw-actions button{width:100%;}}"
       ].join("\n");
 
       (document.head || document.documentElement).appendChild(style);
