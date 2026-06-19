@@ -53,7 +53,7 @@ El registro del worklog usa la **API REST de Jira con autenticación Basic** (co
 4. Escribe y envía un comentario en el ticket.
 5. Si se cumplen las condiciones, aparece el modal **Registrar actividad**:
    - **Actividad** (obligatoria): combo con la lista de actividades del equipo.
-   - **Tiempo invertido** (obligatorio): controles independientes de semanas, días, horas y minutos. Se convierte al formato Jira (`2w 4d 6h 45m`, solo valores > 0). No se escribe a mano.
+   - **Tiempo invertido** (obligatorio): un solo campo en formato Jira (`7w 2d 1h 30m`). Se **pre-llena automáticamente** con el tiempo transcurrido desde que activaste el detector hasta que comentaste, y puedes ajustarlo. Valida el formato en vivo.
    - **Descripción** (no editable): se genera como `[Actividad] [DD/MM/YYYY]` con la fecha actual.
 6. Pulsa **Guardar** para registrar el worklog, o **Cancelar** / `ESC` para cerrar y limpiar el formulario.
 

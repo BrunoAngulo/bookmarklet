@@ -19,6 +19,7 @@
     var TOAST_ID = "ted-jira-worklog-toast";
     var STORAGE_EMAIL_KEY = "ted_jira_worklog_email";
     var STORAGE_TOKEN_KEY = "ted_jira_worklog_token";
+    var STORAGE_STARTED_KEY = "ted_jira_worklog_started_at";
 
     var ACTIVITIES = [
       "Configuración Agente de Éxito",
@@ -42,8 +43,9 @@
     ];
 
     if (window[GLOBAL_KEY] && window[GLOBAL_KEY].installed) {
-      showToast("Detector de actividad Jira reactivado.");
       window[GLOBAL_KEY].lastArmedAt = Date.now();
+      setStartedAt(Date.now());
+      showToast("Detector reactivado. El contador de tiempo se reinició ahora.");
       return;
     }
 
@@ -51,12 +53,13 @@
       elements: null,
       lastTrigger: 0,
       issueKey: "",
+      startedAt: 0,
       credentials: { email: "", token: "" }
     };
 
     window[GLOBAL_KEY] = {
       installed: true,
-      version: "1.0.0",
+      version: "1.1.0",
       lastArmedAt: Date.now(),
       open: function (issueKey) {
         openModal(issueKey || detectIssueKeyFromPage());
@@ -64,13 +67,59 @@
     };
 
     seedCredentials();
+    setStartedAt(Date.now());
     installInterceptors();
     ensureStyles();
     showToast(
       hasStoredCredentials()
-        ? "Detector de actividad Jira activo. Registra un comentario para abrir el formulario."
+        ? "Detector activo. El tiempo se cuenta desde ahora hasta que comentes el ticket."
         : "Detector activo, pero falta el API token de Jira. Configúralo en la web del equipo Ted."
     );
+
+    function setStartedAt(timestamp) {
+      if (window[GLOBAL_KEY]) {
+        window[GLOBAL_KEY].startedAt = timestamp;
+      }
+      if (state) {
+        state.startedAt = timestamp;
+      }
+      writeStorage(STORAGE_STARTED_KEY, String(timestamp));
+    }
+
+    function getStartedAt() {
+      if (window[GLOBAL_KEY] && window[GLOBAL_KEY].startedAt) {
+        return window[GLOBAL_KEY].startedAt;
+      }
+      var stored = Number(readStorage(STORAGE_STARTED_KEY) || 0);
+      return stored > 0 ? stored : 0;
+    }
+
+    function computeElapsedJiraTime() {
+      var start = getStartedAt();
+
+      if (!start) {
+        return "";
+      }
+
+      var minutes = Math.round((Date.now() - start) / 60000);
+
+      if (minutes < 1) {
+        minutes = 1;
+      }
+
+      var hours = Math.floor(minutes / 60);
+      var mins = minutes % 60;
+      var parts = [];
+
+      if (hours > 0) {
+        parts.push(hours + "h");
+      }
+      if (mins > 0) {
+        parts.push(mins + "m");
+      }
+
+      return parts.join(" ") || minutes + "m";
+    }
 
     function seedCredentials() {
       var email = INITIAL_JIRA_EMAIL || readStorage(STORAGE_EMAIL_KEY) || "";
@@ -289,6 +338,17 @@
         : "No se pudo detectar el ticket automáticamente.";
       elements.issueLabel.dataset.type = state.issueKey ? "ok" : "warn";
 
+      var elapsed = computeElapsedJiraTime();
+
+      if (elapsed) {
+        elements.timeInput.value = elapsed;
+        elements.timeNote.hidden = false;
+        elements.timeNote.textContent = "⏱ Calculado desde que activaste el detector (" + elapsed + "). Ajústalo si lo necesitas.";
+      } else {
+        elements.timeNote.hidden = true;
+      }
+
+      updateTimePreview();
       updateDescription();
       setStatus("", "");
 
@@ -317,6 +377,9 @@
 
       state.elements.activitySelect.value = "";
       state.elements.timeInput.value = "";
+      if (state.elements.timeNote) {
+        state.elements.timeNote.hidden = true;
+      }
       updateTimePreview();
       updateDescription();
       setStatus("", "");
@@ -356,9 +419,10 @@
         '  <label class="tjw-label" for="tjw-time">Tiempo invertido <span class="tjw-req">*</span></label>',
         '  <div class="tjw-timefield">',
         '    <span class="tjw-timefield-icon" aria-hidden="true">⏱</span>',
-        '    <input id="tjw-time" class="tjw-timefield-input" type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="2w 4d 6h 45m">',
+        '    <input id="tjw-time" class="tjw-timefield-input" type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="7w 2d 1h 30m">',
         '    <span class="tjw-timefield-check" data-time-check aria-hidden="true"></span>',
         "  </div>",
+        '  <p class="tjw-time-note" data-time-note hidden></p>',
         '  <p class="tjw-time-preview" data-time-hint>Formato: <strong>w</strong> semanas · <strong>d</strong> días · <strong>h</strong> horas · <strong>m</strong> minutos.</p>',
         '  <label class="tjw-label" for="tjw-description">Descripción</label>',
         '  <input id="tjw-description" class="tjw-input" type="text" readonly tabindex="-1" aria-readonly="true">',
@@ -380,6 +444,7 @@
         description: overlay.querySelector("#tjw-description"),
         timeInput: overlay.querySelector("#tjw-time"),
         timeHint: overlay.querySelector("[data-time-hint]"),
+        timeNote: overlay.querySelector("[data-time-note]"),
         timeCheck: overlay.querySelector("[data-time-check]"),
         status: overlay.querySelector("[data-status]"),
         saveButton: overlay.querySelector('[data-action="save"]')
@@ -593,6 +658,7 @@
 
           if (result.ok) {
             setStatus("Worklog registrado correctamente en " + state.issueKey + " (" + payload.timeSpent + ").", "success");
+            setStartedAt(Date.now());
             window.setTimeout(closeModal, 1600);
             return;
           }
@@ -796,6 +862,8 @@
         "#" + MODAL_ID + " .tjw-timefield-input[data-state='ok']{border-color:#10b981;box-shadow:0 0 0 3px rgba(16,185,129,0.14);}",
         "#" + MODAL_ID + " .tjw-timefield-input[data-state='bad']{border-color:#ef4444;box-shadow:0 0 0 3px rgba(239,68,68,0.14);}",
         "#" + MODAL_ID + " .tjw-timefield-check{position:absolute;right:14px;font-size:16px;font-weight:800;color:#10b981;}",
+        "#" + MODAL_ID + " .tjw-time-note{margin:0 0 6px;padding:7px 10px;border-radius:8px;background:#eff6ff;color:#1d4ed8;font-size:12.5px;font-weight:600;}",
+        "#" + MODAL_ID + " .tjw-time-note[hidden]{display:none;}",
         "#" + MODAL_ID + " .tjw-time-preview{margin:0 0 18px;font-size:12.5px;color:#64748b;min-height:16px;}",
         "#" + MODAL_ID + " .tjw-time-preview strong{color:#334155;}",
         "#" + MODAL_ID + " .tjw-time-preview[data-type='ok']{color:#047857;font-weight:600;}",
